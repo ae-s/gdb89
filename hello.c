@@ -12,8 +12,16 @@ void (*exceptionHook)() = NULL;
 
 void _main(void)
 {
+	long int x;
+	puts("foo\n");
+	puts("Setting traps\n");
+	set_debug_traps();
+	for (x = 0 ; x++ ; x < 1000000) {}
+	puts("breakpointing\n");
+	breakpoint();
+
 	while (1) {
-		puts("Hello, World!\n");
+//		puts("Hello, World!\n");
 	}
 }
 
@@ -40,5 +48,20 @@ int getDebugChar(void)
 /* Used by the GDB stub to set a vector handler */
 void exceptionHandler(int vec_no, void *func)
 {
-	SetIntVec((long) vec_no, (INT_HANDLER) func);
+	void *old, *new;
+	old = GetIntVec((long) vec_no * 4);
+	printf("Setting %xd (%lp) ...\n", vec_no * 4, func);
+
+	if (vec_no * 4 > TRAP_15) {
+		printf(" - Ignoring, >#15\n");
+		return;
+	}
+
+	if ((vec_no * 4 > FIRST_AUTO_INT) && (vec_no * 4 < LAST_AUTO_INT)) {
+		printf(" - Ignoring AI\n");
+	}
+
+	SetIntVec((long) vec_no * 4, (INT_HANDLER) func);
+	new = GetIntVec((long) vec_no * 2);
+	printf(" - %lp -> %lp\n", old, new);
 }

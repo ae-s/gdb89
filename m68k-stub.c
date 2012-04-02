@@ -56,9 +56,6 @@
  *  exception number and push it on the stack in place of the return address.
  *  The external function exceptionHandler() is
  *  used to attach a specific handler to a specific m68k exception.
- *  For 68020 machines, the ability to have a return address around just
- *  so the vector can be determined is not necessary because the '020 pushes an
- *  extra word onto the stack containing the vector offset
  * 
  *  Because gdb will sometimes write to the stack area to execute function
  *  calls, this program cannot rely on using the supervisor stack so it
@@ -105,9 +102,11 @@
  * 
  ****************************************************************************/
 
+#include <intr.h>
 #include <stdio.h>
 #include <string.h>
 #include <setjmp.h>
+#include <stdint.h>
 
 /************************************************************************
  *
@@ -194,81 +193,51 @@ static int* stackPtr = &remcomStack[STACKSIZE/sizeof(int) - 1];
 
 static ExceptionHook oldExceptionHook;
 
-#ifdef mc68020
-/* the size of the exception stack on the 68020 varies with the type of
- * exception.  The following table is the number of WORDS used
- * for each exception format.
- */
-const short exceptionSize[] = { 4,4,6,4,4,4,4,4,29,10,16,46,12,4,4,4 };
-#endif
-
-#ifdef mc68332
-static const short exceptionSize[] = { 4,4,6,4,4,4,4,4,4,4,4,4,16,4,4,4 };
-#endif
-
 /************* jump buffer used for setjmp/longjmp **************************/
 jmp_buf remcomEnv;
 
 /***************************  ASSEMBLY CODE MACROS *************************/
 /* 									   */
 
-#ifdef __HAVE_68881__
-/* do an fsave, then remember the address to begin a restore from */
-#define SAVE_FP_REGS()    asm(" fsave   a0@-");		\
-			  asm(" fmovemx fp0-fp7,_registers+72");        \
-			  asm(" fmoveml fpcr/fpsr/fpi,_registers+168"); 
-#define RESTORE_FP_REGS()                              \
-asm("                                                \n\
-    fmoveml  _registers+168,fpcr/fpsr/fpi            \n\
-    fmovemx  _registers+72,fp0-fp7                   \n\
-    cmpl     #-1,a0@     |  skip frestore flag set ? \n\
-    beq      skip_frestore                           \n\
-    frestore a0@+                                    \n\
-skip_frestore:                                       \n\
-");
-
-#else
 #define SAVE_FP_REGS()
 #define RESTORE_FP_REGS()
-#endif /* __HAVE_68881__ */
 
 void return_to_super();
 void return_to_user();
 
 asm("
 .text
-.globl _return_to_super
-_return_to_super:
-        movel   _registers+60,sp /* get new stack pointer */        
-        movel   _lastFrame,a0   /* get last frame info  */              
+.globl return_to_super
+return_to_super:
+        movel   registers+60,%sp /* get new stack pointer */        
+        movel   lastFrame,%a0   /* get last frame info  */              
         bra     return_to_any
 
-.globl _return_to_user
-_return_to_user:
-        movel   _registers+60,a0 /* get usp */                          
-        movel   a0,usp           /* set usp */				
-        movel   _superStack,sp  /* get original stack pointer */        
+.globl return_to_user
+return_to_user:
+        movel   registers+60,%a0 /* get usp */                          
+        movel   %a0,%usp           /* set usp */				
+        movel   superStack,%sp  /* get original stack pointer */        
 
 return_to_any:
-        movel   _lastFrame,a0   /* get last frame info  */              
-        movel   a0@+,_lastFrame /* link in previous frame     */        
-        addql   #8,a0           /* skip over pc, vector#*/              
-        movew   a0@+,d0         /* get # of words in cpu frame */       
-        addw    d0,a0           /* point to end of data        */       
-        addw    d0,a0           /* point to end of data        */       
-        movel   a0,a1                                                   
+        movel   lastFrame,%a0   /* get last frame info  */              
+        movel   (%a0)+,lastFrame /* link in previous frame     */        
+        addql   #8,%a0           /* skip over pc, vector#*/              
+        movew   (%a0)+,%d0         /* get # of words in cpu frame */       
+        addw    %d0,%a0           /* point to end of data        */       
+        addw    %d0,%a0           /* point to end of data        */       
+        movel   %a0,%a1                                                   
 #                                                                       
 # copy the stack frame                                                  
-        subql   #1,d0                                                   
 copyUserLoop:                                                               
-        movew   a1@-,sp@-                                               
-        dbf     d0,copyUserLoop                                             
+        movew   -(%a1),-(%sp)                                               
+        dbf     %d0,copyUserLoop                                             
 ");                                                                     
         RESTORE_FP_REGS()                                              
-   asm("   moveml  _registers,d0-d7/a0-a6");			        
+   asm("   moveml  registers,%d0-%d7/%a0-%a6");			        
    asm("   rte");  /* pop and go! */                                    
 
-#define DISABLE_INTERRUPTS()   asm("         oriw   #0x0700,sr");
+#define DISABLE_INTERRUPTS()   asm("         oriw   #0x0700,%sr");
 #define BREAKPOINT() asm("   trap #1");
 
 /* this function is called immediately when a level 7 interrupt occurs */
@@ -277,118 +246,22 @@ copyUserLoop:
 /* For the 68000, the offset for sr is 6 due to the jsr return address */
 asm("
 .text
-.globl __debug_level7
-__debug_level7:
-	movew   d0,sp@-");
-#if defined (mc68020) || defined (mc68332)
-asm("	movew   sp@(2),d0");
-#else
-asm("	movew   sp@(6),d0");
-#endif
-asm("	andiw   #0x700,d0
-	cmpiw   #0x700,d0
+.globl _debug_level7
+_debug_level7:
+	movew   %d0,-(%sp)
+	movew   6(%sp),%d0
+	andiw   #0x700,%d0
+	cmpiw   #0x700,%d0
 	beq     _already7
-        movew   sp@+,d0	
-        bra     __catchException
+        movew   (%sp)+,%d0
+        bra     _catchException
 _already7:
-	movew   sp@+,d0");
-#if !defined (mc68020) && !defined (mc68332)
-asm("	lea     sp@(4),sp");     /* pull off 68000 return address */
-#endif
-asm("	rte");
+	movew   (%sp)+,%d0
+	lea     4(%sp),%sp     /* pull off 68000 return address */
+	rte");
 
 extern void _catchException ();
 
-#if defined (mc68020) || defined (mc68332)
-/* This function is called when a 68020 exception occurs.  It saves
- * all the cpu and fpcp regs in the _registers array, creates a frame on a
- * linked list of frames which has the cpu and fpcp stack frames needed
- * to properly restore the context of these processors, and invokes
- * an exception handler (remcom_handler).
- *
- * stack on entry:                       stack on exit:
- *   N bytes of junk                     exception # MSWord
- *   Exception Format Word               exception # MSWord
- *   Program counter LSWord              
- *   Program counter MSWord             
- *   Status Register                    
- *                                       
- *                                       
- */
-asm(" 
-.text
-.globl __catchException
-__catchException:");
-DISABLE_INTERRUPTS();
-asm("
-        moveml  d0-d7/a0-a6,_registers /* save registers        */
-	movel	_lastFrame,a0	/* last frame pointer */
-");
-SAVE_FP_REGS();        
-asm("
-	lea     _registers,a5   /* get address of registers     */
-        movew   sp@,d1          /* get status register          */
-        movew   d1,a5@(66)      /* save sr		 	*/	
-	movel   sp@(2),a4       /* save pc in a4 for later use  */
-        movel   a4,a5@(68)      /* save pc in _regisers[]      	*/
-
-#
-# figure out how many bytes in the stack frame
-	movew   sp@(6),d0	/* get '020 exception format	*/
-        movew   d0,d2           /* make a copy of format word   */
-        andiw   #0xf000,d0      /* mask off format type         */
-        rolw    #5,d0           /* rotate into the low byte *2  */
-        lea     _exceptionSize,a1   
-        addw    d0,a1           /* index into the table         */
-	movew   a1@,d0          /* get number of words in frame */
-        movew   d0,d3           /* save it                      */
-        subw    d0,a0		/* adjust save pointer          */
-        subw    d0,a0		/* adjust save pointer(bytes)   */
-	movel   a0,a1           /* copy save pointer            */
-	subql   #1,d0           /* predecrement loop counter    */
-#
-# copy the frame
-saveFrameLoop:
-	movew  	sp@+,a1@+
-	dbf     d0,saveFrameLoop
-#
-# now that the stack has been clenaed,
-# save the a7 in use at time of exception
-        movel   sp,_superStack  /* save supervisor sp           */
-        andiw   #0x2000,d1      /* were we in supervisor mode ? */
-        beq     userMode       
-        movel   a7,a5@(60)      /* save a7                  */
-        bra     a7saveDone
-userMode:  
-	movel   usp,a1    	
-        movel   a1,a5@(60)      /* save user stack pointer	*/
-a7saveDone:
-
-#
-# save size of frame
-        movew   d3,a0@-
-
-#
-# compute exception number
-	andl    #0xfff,d2   	/* mask off vector offset	*/
-	lsrw    #2,d2   	/* divide by 4 to get vect num	*/
-        movel   d2,a0@-         /* save it                      */
-#
-# save pc causing exception
-        movel   a4,a0@-
-#
-# save old frame link and set the new value
-	movel	_lastFrame,a1	/* last frame pointer */
-	movel   a1,a0@-		/* save pointer to prev frame	*/
-        movel   a0,_lastFrame
-
-        movel   d2,sp@-		/* push exception num           */
-	movel   _exceptionHook,a0  /* get address of handler */
-        jbsr    a0@             /* and call it */
-        clrl    sp@             /* replace exception num parm with frame ptr */
-        jbsr     __returnFromException   /* jbsr, but never returns */
-");
-#else /* mc68000 */
 /* This function is called when an exception occurs.  It translates the
  * return address found on the stack into an exception vector # which
  * is then handled by either handle_exception or a system handler.
@@ -403,65 +276,64 @@ a7saveDone:
  */
 asm("
 .text
-.globl __catchException
-__catchException:");
+.globl _catchException
+_catchException:");
 DISABLE_INTERRUPTS();
 asm("
-        moveml d0-d7/a0-a6,_registers  /* save registers               */
-	movel	_lastFrame,a0	/* last frame pointer */
+        moveml %d0-%d7/%a0-%a6,registers  /* save registers               */
+        movel   lastFrame,%a0   /* last frame pointer */
 ");
 SAVE_FP_REGS();        
 asm("
-        lea     _registers,a5   /* get address of registers     */
-        movel   sp@+,d2         /* pop return address           */
-	addl 	#1530,d2        /* convert return addr to 	*/
-	divs 	#6,d2   	/*  exception number		*/
-	extl    d2   
+        lea     registers,%a5   /* get address of registers     */
+        movel   (%sp)+,%d2         /* pop return address           */
+        addl    #1530,%d2        /* convert return addr to       */
+        divs    #6,%d2           /*  exception number            */
+        extl    %d2   
 
-        moveql  #3,d3           /* assume a three word frame     */
+        moveql  #3,%d3           /* assume a three word frame     */
 
-        cmpiw   #3,d2           /* bus error or address error ? */
+        cmpiw   #3,%d2           /* bus error or address error ? */
         bgt     normal          /* if >3 then normal error      */
-        movel   sp@+,a0@-       /* copy error info to frame buff*/
-        movel   sp@+,a0@-       /* these are never used         */
-        moveql  #7,d3           /* this is a 7 word frame       */
+        movel   (%sp)+,-(%a0)       /* copy error info to frame buff*/
+        movel   (%sp)+,-(%a0)       /* these are never used         */
+        moveql  #7,%d3           /* this is a 7 word frame       */
      
 normal:   
-	movew   sp@+,d1         /* pop status register          */
-        movel   sp@+,a4         /* pop program counter          */
-        movew   d1,a5@(66)      /* save sr		 	*/	
-        movel   a4,a5@(68)      /* save pc in _regisers[]      	*/
-        movel   a4,a0@-         /* copy pc to frame buffer      */
-	movew   d1,a0@-         /* copy sr to frame buffer      */
+        movew   (%sp)+,%d1         /* pop status register          */
+        movel   (%sp)+,%a4         /* pop program counter          */
+        movew   %d1,%a5@(66)      /* save sr                      */      
+        movel   %a4,%a5@(68)      /* save pc in _regisers[]       */
+        movel   %a4,%a0@-         /* copy pc to frame buffer      */
+        movew   %d1,%a0@-         /* copy sr to frame buffer      */
 
-        movel   sp,_superStack  /* save supervisor sp          */
+        movel   %sp,superStack  /* save supervisor sp          */
 
-        andiw   #0x2000,d1      /* were we in supervisor mode ? */
+        andiw   #0x2000,%d1      /* were we in supervisor mode ? */
         beq     userMode       
-        movel   a7,a5@(60)      /* save a7                  */
+        movel   %a7,%a5@(60)      /* save a7                  */
         bra     saveDone             
 userMode:
-        movel   usp,a1    	/* save user stack pointer 	*/
-        movel   a1,a5@(60)      /* save user stack pointer	*/
+        movel   %usp,%a1          /* save user stack pointer      */
+        movel   %a1,%a5@(60)      /* save user stack pointer      */
 saveDone:
 
-        movew   d3,a0@-         /* push frame size in words     */
-        movel   d2,a0@-         /* push vector number           */
-        movel   a4,a0@-         /* push exception pc            */
+        movew   %d3,%a0@-         /* push frame size in words     */
+        movel   %d2,%a0@-         /* push vector number           */
+        movel   %a4,%a0@-         /* push exception pc            */
 
 #
 # save old frame link and set the new value
-	movel	_lastFrame,a1	/* last frame pointer */
-	movel   a1,a0@-		/* save pointer to prev frame	*/
-        movel   a0,_lastFrame
+        movel   lastFrame,%a1   /* last frame pointer */
+        movel   %a1,%a0@-         /* save pointer to prev frame   */
+        movel   %a0,lastFrame
 
-        movel   d2,sp@-		/* push exception num           */
-	movel   _exceptionHook,a0  /* get address of handler */
-        jbsr    a0@             /* and call it */
-        clrl    sp@             /* replace exception num parm with frame ptr */
-        jbsr     __returnFromException   /* jbsr, but never returns */
+        movel   %d2,%sp@-         /* push exception num           */
+        movel   exceptionHook,%a0  /* get address of handler */
+        jbsr    %a0@             /* and call it */
+        clrl    %sp@             /* replace exception num parm with frame ptr */
+        jbsr    _returnFromException   /* jbsr, but never returns */
 ");
-#endif
 
 
 /*
@@ -469,12 +341,12 @@ saveDone:
  * stack pointer into an area reserved for debugger use in case the
  * breakpoint happened in supervisor mode.
  */
-asm("_remcomHandler:");
-asm("           addl    #4,sp");        /* pop off return address     */
-asm("           movel   sp@+,d0");      /* get the exception number   */
-asm("		movel   _stackPtr,sp"); /* move to remcom stack area  */
-asm("		movel   d0,sp@-");	/* push exception onto stack  */
-asm("		jbsr    _handle_exception");    /* this never returns */
+asm("remcomHandler:");
+asm("           addl    #4,%sp");        /* pop off return address     */
+asm("           move.l   (%sp)+,%d0");      /* get the exception number   */
+asm("		move.l   stackPtr,%sp"); /* move to remcom stack area  */
+asm("		move.l   %d0,-(%sp)");	/* push exception onto stack  */
+asm("		jsr    handle_exception");    /* this never returns */
 asm("           rts");                  /* return */
 
 void
@@ -489,13 +361,11 @@ _returnFromException (Frame * frame)
       frame->fsaveHeader = -1;	/* restore regs, but we dont have fsave info */
     }
 
-#if !defined (mc68020) && !defined (mc68332)
   /* a 68000 cannot use the internal info pushed onto a bus error
    * or address error frame when doing an RTE so don't put this info
    * onto the stack or the stack will creep every time this happens.
    */
   frame->frameSize = 3;
-#endif
 
   /* throw away any frames in the list after this frame */
   lastFrame = frame;
@@ -577,8 +447,7 @@ getpacket (void)
 	    {
 	      if (remote_debug)
 		{
-		  fprintf (stderr,
-			   "bad checksum.  My count = 0x%x, sent=0x%x. buf=%s\n",
+		  printf ( "bad checksum.  My count = 0x%x, sent=0x%x. buf=%s\n",
 			   checksum, xmitcsum, buffer);
 		}
 	      putDebugChar ('-');	/* failed checksum */
@@ -641,7 +510,7 @@ debug_error (format, parm)
      char *parm;
 {
   if (remote_debug)
-    fprintf (stderr, format, parm);
+    printf (format, parm);
 }
 
 /* convert the memory pointed to by mem into hex, placing result in buf */
@@ -686,8 +555,7 @@ hex2mem (buf, mem, count)
 /* a bus error has occurred, perform a longjmp
    to return execution and allow handling of the error */
 
-void
-handle_buserror ()
+DEFINE_INT_HANDLER(handle_buserror)
 {
   longjmp (remcomEnv, 1);
 }
@@ -813,7 +681,7 @@ hexToInt (char **ptr, int *intValue)
  * This function does all command procesing for interfacing to gdb.
  */
 void
-handle_exception (int exceptionVector)
+handle_exception (int32_t exceptionVector)
 {
   int sigval, stepping;
   int addr, length;
@@ -822,8 +690,8 @@ handle_exception (int exceptionVector)
   Frame *frame;
 
   if (remote_debug)
-    printf ("vector=%d, sr=0x%x, pc=0x%x\n",
-	    exceptionVector, registers[PS], registers[PC]);
+	  printf ("vec=%lx, sr=%x, pc=%x\n",
+		  exceptionVector, registers[PS], registers[PC]);
 
   /* reply to host that an exception has occurred */
   sigval = computeSignal (exceptionVector);
@@ -1072,8 +940,9 @@ set_debug_traps ()
   exceptionHandler (40, _catchException);
 
   /* 48 to 54 are floating point coprocessor errors */
-  for (exception = 48; exception <= 54; exception++)
-    exceptionHandler (exception, _catchException);
+  /* TI89 has no FPU*/
+//  for (exception = 48; exception <= 54; exception++)
+//    exceptionHandler (exception, _catchException);
 
   if (oldExceptionHook != remcomHandler)
     {
