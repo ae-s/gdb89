@@ -142,8 +142,21 @@ catch_exception:
 super_mode:
 	move.w	fb_vec_no,-(%sp)
 	jbsr	halted
-	/* XXX
-	 * need to fix up the stack before returning */
+
+	move.l	%a7,debug_stack
+	move.l	super_stack,%a7
+
+	/* Write an exception stack frame.  This works only if the
+	 * exception was group 1 or 2.  I'm just going to cross my
+	 * fingers and hope.
+	 */
+
+	move.w	fb_vec_no,-(%a7)
+	move.l	fb_pc,-(%a7)
+	move.w	fb_status,-(%a7)
+
+	movem.l	regs,%d0-%d7/%a0-%a6
+
 	rte
 ");
 
