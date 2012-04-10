@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 
-INT_HANDLER traps[255];
+INT_HANDLER *traps;
 
 extern INT_HANDLER catch_BUS;
 extern INT_HANDLER catch_ADDRESS;
@@ -21,6 +21,10 @@ struct registers regs;
 void set_debug_traps(void)
 {
 	debug_stack = malloc(1024 * sizeof(void *));
+	traps = malloc(255 * sizeof(void *));
+
+	// trap AI4 while the debugger is in effect
+	
 }
 
 /* Return the system to normal
@@ -28,6 +32,7 @@ void set_debug_traps(void)
 void remove_debug_traps(void)
 {
 	free(debug_stack);
+	free(traps);
 }
 
 
