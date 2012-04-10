@@ -2,62 +2,36 @@
  * is in the public domain.
  */
 
-#include <intr.h>
-#include <string.h>
-#include <stdint.h>
+#include <tigcclib.h>
+#include "ti89-stub.h"
 
 INT_HANDLER *traps;
+volatile void *debug_stack;
 
-extern INT_HANDLER catch_BUS;
-extern INT_HANDLER catch_ADDRESS;
 extern INT_HANDLER catch_group0;
-extern INT_HANDLER catch_group12;
 extern INT_HANDLER catch_exception;
 
-struct registers regs;
+volatile struct registers regs;
 
-/* Set up the debugger
- */
-void set_debug_traps(void)
-{
-	debug_stack = malloc(1024 * sizeof(void *));
-	traps = malloc(255 * sizeof(void *));
+void halted(uint16_t);
 
-	// trap AI4 while the debugger is in effect
-	
-}
+volatile void *debug_stack;
+volatile void *super_stack;
+volatile void *user_stack;
 
-/* Return the system to normal
- */
-void remove_debug_traps(void)
-{
-	free(debug_stack);
-	free(traps);
-}
+volatile void *fb_fault_addr;
+volatile int16_t fb_fault_insn;
+volatile int16_t fb_status;
+volatile int32_t fb_pc;
+volatile int16_t fb_vec_no;
 
-
-void *debug_stack;
-void *super_stack;
-void *user_stack;
-
-int16_t fd_function;
-void *fb_fault_addr;
-int16_t fb_fault_insn;
-int16_t fb_status;
-int32_t fb_pc;
-int16_t fb_vec_no;
-
-asm("
-.text
-catch_BUS:
-	move.w	#0x08,frame_buf+14
+DEFINE_INT_HANDLER_ASM(catch_BUS, "
+	move.w	#0x08,fb_vec_no
 	bra	catch_group0
 ");
 
-asm("
-.text
-catch_ADDRESS:
-	move.w	#0x0C,frame_buf+14
+DEFINE_INT_HANDLER_ASM(catch_ADDRESS, "
+	move.w	#0x0C,fb_vec_no
 	bra	catch_group0
 ");
 
@@ -79,13 +53,6 @@ catch_ADDRESS:
 asm("
 .text
 catch_group0:
-	/* bookkeeping is most of what a debugger does */
-	move.w	(%a7)+,fb_function
-	move.l	(%a7)+,fb_fault_addr
-	move.w	(%a7)+,fb_fault_insn
-	/* save registers after popping the above in order to better
-	 * reflect the state of the program
-	 */
 	movem.l	%d0-%d7/%a0-%a7,regs	/* save registers */
 
 	move.l	%a7,super_stack		/* choose the stack */
@@ -116,12 +83,11 @@ catch_group0:
  * vector number & format code
  * (25 extra words if format code = 8)
  */
-asm("
-.text
-catch_group12:
+DEFINE_INT_HANDLER_ASM(catch_group12, "
 	move.w	(%a7)+,fb_status	/* status register */
 	move.l	(%a7)+,fb_pc		/* program counter */
 	move.w	(%a7)+,fb_vec_no	/* stack format code in top nibble */
+	adda	#8,%a7
 	/* save registers after popping the above in order to better
 	 * reflect the state of the program
 	 */
@@ -139,14 +105,14 @@ catch_group12:
  * Once the machine is interrupted, it comes here to enter the
  * debugger.
  */
-
 asm("
 .text
 catch_exception:
 	move.w	fb_status,%d0
 	andi.w	#0x2000,%d0
 	bne	super_mode
-	move.l	%usp,regs+15*4
+	move.l	%usp,%a6
+	move.l	%a6,regs+(15*4)
 super_mode:
 	move.w	fb_vec_no,-(%sp)
 
@@ -155,15 +121,6 @@ super_mode:
 
 	move.l	%a7,debug_stack
 	move.l	super_stack,%a7
-
-	/* Write an exception stack frame.  This works only if the
-	 * exception was group 1 or 2.  I'm just going to cross my
-	 * fingers and hope.
-	 */
-
-	move.w	fb_vec_no,-(%a7)
-	move.l	fb_pc,-(%a7)
-	move.w	fb_status,-(%a7)
 
 	movem.l	regs,%d0-%d7/%a0-%a6
 
@@ -177,9 +134,41 @@ super_mode:
  * catch_exception calls halted() once the machine is in a stable
  * state where debugger C code won't disrupt the interrupted code.
  */
-void halted(void)
+void halted(uint16_t vec_no)
 {
-	
+	printf("Broke in to %x\n", vec_no);
+	return;
+}
+
+/* Set up the debugger
+ */
+void set_debug_traps(void)
+{
+	debug_stack = malloc(1024 * sizeof(void *));
+	traps = malloc(255 * sizeof(void *));
+
+	/* TODO:
+	 *
+	 * trap AI4 while the debugger is in effect, to allow serial
+	 * communications to happen.
+	 */
+
+	puts("trap 14\n");
+	SetIntVec(TRAP_14, catch_group12);
+	puts("on\n");
+	SetIntVec(INT_VEC_ON_KEY_PRESS, catch_group12);
+	puts("int5\n");
+	SetIntVec(AUTO_INT_5, catch_group12);
+	puts("int2\n");
+	SetIntVec(AUTO_INT_2, catch_group12);
+}
+
+/* Return the system to normal
+ */
+void remove_debug_traps(void)
+{
+	free(debug_stack);
+	free(traps);
 }
 
 /* Block until a byte is received from the host gdb.
@@ -190,6 +179,9 @@ char recv_byte(void)
 }
 
 char *recv_packet(void)
+{
+
+}
 
 /* Send a byte to the host gdb and then return.
  */
