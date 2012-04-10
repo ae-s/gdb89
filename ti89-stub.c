@@ -134,7 +134,10 @@ catch_group12:
 ");
 
 
-/* Exception handler
+/* Exception handler, debugger entry point
+ *
+ * Once the machine is interrupted, it comes here to enter the
+ * debugger.
  */
 
 asm("
@@ -146,6 +149,8 @@ catch_exception:
 	move.l	%usp,regs+15*4
 super_mode:
 	move.w	fb_vec_no,-(%sp)
+
+	/* Enter the debugger */
 	jbsr	halted
 
 	move.l	%a7,debug_stack
@@ -166,7 +171,11 @@ super_mode:
 ");
 
 /* This function executes when the machine is halted; it is the entry
- * point to the debugger proper.
+ * point to the debugger proper.  Everything up to this point is just
+ * framing.
+ *
+ * catch_exception calls halted() once the machine is in a stable
+ * state where debugger C code won't disrupt the interrupted code.
  */
 void halted(void)
 {
@@ -180,7 +189,7 @@ char recv_byte(void)
 	return peekIO(0x60000f);
 }
 
-char * recv_packet(void)
+char *recv_packet(void)
 
 /* Send a byte to the host gdb and then return.
  */
