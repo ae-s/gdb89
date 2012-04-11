@@ -10,5 +10,6 @@ clean:
 	rm -f hello.89z hello.dbg
 
 install: hello.89z
-	tilp --calc=ti89 --cable=SilverLink --no-gui hello.89z
+	tiput -m TI89 -c SilverLink --force hello.89z
+	tikey -m TI89 '\x115' 'hello()\x0d'
 
