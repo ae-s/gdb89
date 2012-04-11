@@ -172,8 +172,6 @@ void set_debug_traps(void)
 	SetIntVec(TRAP_14, catch_group12);
 	puts("on\n");
 	SetIntVec(INT_VEC_ON_KEY_PRESS, catch_group12);
-	puts("int5\n");
-	SetIntVec(AUTO_INT_5, catch_group12);
 	puts("int2\n");
 	SetIntVec(AUTO_INT_2, catch_group12);
 }
