@@ -6,7 +6,6 @@
 #include "ti89-stub.h"
 
 INT_HANDLER *traps;
-volatile void *debug_stack;
 
 extern INT_HANDLER catch_group0;
 extern INT_HANDLER catch_exception;
@@ -15,9 +14,9 @@ volatile struct registers regs;
 
 void halted(uint16_t);
 
+void *debug_stack_seg;
 volatile void *debug_stack;
 volatile void *super_stack;
-volatile void *user_stack;
 
 volatile void *fb_fault_addr;
 volatile int16_t fb_fault_insn;
@@ -55,7 +54,6 @@ asm("
 catch_group0:
 	movem.l	%d0-%d7/%a0-%a7,regs	/* save registers */
 
-	move.l	%a7,super_stack		/* choose the stack */
 	move.l	debug_stack,%a7
 
 	bra	catch_exception
@@ -80,20 +78,12 @@ catch_group0:
  * status register    <-- top of supervisor stack
  * pc high
  * pc low
- * vector number & format code
- * (25 extra words if format code = 8)
  */
 DEFINE_INT_HANDLER_ASM(catch_group12, "
-	move.w	(%a7)+,fb_status	/* status register */
-	move.l	(%a7)+,fb_pc		/* program counter */
-	move.w	(%a7)+,fb_vec_no	/* stack format code in top nibble */
-	adda	#8,%a7
-	/* save registers after popping the above in order to better
-	 * reflect the state of the program
-	 */
+	move.w	(%a7),fb_status		/* status register */
+	move.l	2(%a7),fb_pc		/* program counter */
 	movem.l	%d0-%d7/%a0-%a7,regs
 
-	move.l	%a7,super_stack
 	move.l	debug_stack,%a7
 
 	bra	catch_exception
@@ -111,18 +101,32 @@ catch_exception:
 	move.w	fb_status,%d0
 	andi.w	#0x2000,%d0
 	bne	super_mode
+
+	/* branch not taken: was in user mode */
 	move.l	%usp,%a6
 	move.l	%a6,regs+(15*4)
 super_mode:
-	move.w	fb_vec_no,-(%sp)
-
 	/* Enter the debugger */
-	jbsr	halted
+	move.w	fb_vec_no,-(%sp)
+	bsr	halted
 
+	addq.l	#2,%sp
+
+	lea.l	(%sp),%a0
+	move.l	debug_stack,%a1
+	cmpa.l	%a0,%a1
+	beq	is_ok
+
+	move.l	%a0,-(%sp)
+	move.l	%a1,-(%sp)
+	bsr	stack_mismatch
+	add.l	#8,%sp
+
+is_ok:
+	/* if everything is good, the stack points back where it started. */
 	move.l	%a7,debug_stack
-	move.l	super_stack,%a7
 
-	movem.l	regs,%d0-%d7/%a0-%a6
+	movem.l	regs,%d0-%d7/%a0-%a7
 
 	rte
 ");
@@ -137,14 +141,25 @@ super_mode:
 void halted(uint16_t vec_no)
 {
 	printf("Broke in to %x\n", vec_no);
+	printf("savesp = %lx\n", regs.a7);
+	printf("savepc = %lx\n", fb_pc);
 	return;
+}
+
+void stack_mismatch(void *isnow, void *shouldbe)
+{
+	printf("STACK MISMATCH\n"
+	       "I see: %lx\n"
+	       "Should %lx\n", isnow, shouldbe);
 }
 
 /* Set up the debugger
  */
 void set_debug_traps(void)
 {
-	debug_stack = malloc(1024 * sizeof(void *));
+	debug_stack_seg = malloc(1024 * sizeof(void *));
+	// smack in the middle, because I'm stupid or something.
+	debug_stack = debug_stack_seg + (512 * sizeof(void *));
 	traps = malloc(255 * sizeof(void *));
 
 	/* TODO:
@@ -167,7 +182,7 @@ void set_debug_traps(void)
  */
 void remove_debug_traps(void)
 {
-	free(debug_stack);
+	free(debug_stack_seg);
 	free(traps);
 }
 
