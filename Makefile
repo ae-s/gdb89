@@ -13,4 +13,3 @@ clean:
 install: hello.89z
 	tiput -m TI89 -c SilverLink --force hello.89z
 	tikey -m TI89 '\x115' 'hello()\x0d'
-
