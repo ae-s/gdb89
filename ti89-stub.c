@@ -1,5 +1,11 @@
 /* Inspired by the file `m68k-stub.c' shipped with gdb, which says it
  * is in the public domain.
+ *
+ * This file is governed by the GNU GPL version 3.
+ *
+ * You are permitted to link it with any code for the purpose of
+ * debugging.  The GPL only comes in to play if you share the compiled
+ * binary with this file linked in to it.
  */
 
 #include <tigcclib.h>
@@ -9,6 +15,7 @@ INT_HANDLER *traps;
 
 extern INT_HANDLER catch_group0;
 extern INT_HANDLER catch_exception;
+extern INT_HANDLER catch_ai4;
 
 volatile struct registers regs;
 
@@ -17,6 +24,8 @@ void halted(uint16_t);
 void *debug_stack_seg;
 volatile void *debug_stack;
 volatile void *super_stack;
+
+volatile int tsc = 0;
 
 volatile void *fb_fault_addr;
 volatile int16_t fb_fault_insn;
@@ -33,6 +42,7 @@ DEFINE_INT_HANDLER_ASM(catch_ADDRESS, "
 	move.w	#0x0C,fb_vec_no
 	bra	catch_group0
 ");
+
 
 /* Group 0 exception handler
  * - Reset
@@ -80,11 +90,12 @@ catch_group0:
  * pc low
  */
 DEFINE_INT_HANDLER_ASM(catch_group12, "
-	move.w	(%a7),fb_status		/* status register */
-	move.l	2(%a7),fb_pc		/* program counter */
+	ori	#0x0700,sr		/* disable interrupts */
+	move.w	(%sp),fb_status		/* status register */
+	move.l	2(%sp),fb_pc		/* program counter */
 	movem.l	%d0-%d7/%a0-%a7,regs
 
-	move.l	debug_stack,%a7
+	move.l	debug_stack,%sp
 
 	bra	catch_exception
 ");
@@ -105,7 +116,14 @@ catch_exception:
 	/* branch not taken: was in user mode */
 	move.l	%usp,%a6
 	move.l	%a6,regs+(15*4)
+	bra	start_debugger
+
 super_mode:
+	/* the processor was in supervisor mode, so I ought to record
+	 * that somewhere.
+	 */
+
+start_debugger:
 	/* Enter the debugger */
 	move.w	fb_vec_no,-(%sp)
 	bsr	halted
@@ -123,10 +141,17 @@ super_mode:
 	add.l	#8,%sp
 
 is_ok:
-	/* if everything is good, the stack points back where it started. */
-	move.l	%a7,debug_stack
+
+	/* if everything is good, the stack points back where it was
+	 * before the debugger entered, and this is needless.
+	 * Preserving this allows storing status data on the debugger
+	 * stack, however, as registers are not preserved across
+	 * debugger invocations.
+	 */
+	move.l	%sp,debug_stack
 
 	movem.l	regs,%d0-%d7/%a0-%a7
+	move.l	fb_status,(%sp)
 
 	rte
 ");
@@ -140,17 +165,45 @@ is_ok:
  */
 void halted(uint16_t vec_no)
 {
-	printf("Broke in to %x\n", vec_no);
-	printf("savesp = %lx\n", regs.a7);
-	printf("savepc = %lx\n", fb_pc);
+	/* save linkport stat to restore after exit */
+	unsigned char port_stat;
+	/* turn on TRACE bit */
+	fb_status |= 0x8000;
+
+	printf_xy(0, 15, "Broke in to %x", vec_no);
+	printf_xy(0, 25, "sp = %lp, sr = %x", regs.a7, fb_status);
+	printf_xy(0, 35, "savepc = %lp", fb_pc);
+	printf_xy(0, 45, "TSC %d", tsc++);
+
+	puts("link\n");
+	traps[INT_VEC_LINK] = GetIntVec(INT_VEC_LINK);
+	SetIntVec(INT_VEC_LINK, catch_ai4);
+
+	{
+		asm("andi	#0xf0ff,%sr");
+
+		port_stat = peekIO(0x60000c);
+		pokeIO(0x60000c, port_stat | (1<<3 + 1<<1 + 1<<0));
+	}
+
+	while (1) {
+		int p;
+		p = recv_byte();
+		printf("Got %c\n", p);
+	}
+	// restore linkport
+	pokeIO(0x60000c, port_stat);
+
 	return;
 }
 
+/* Routine used to complain if the stack and saved stack don't match
+ */
 void stack_mismatch(void *isnow, void *shouldbe)
 {
 	printf("STACK MISMATCH\n"
-	       "I see: %lx\n"
-	       "Should %lx\n", isnow, shouldbe);
+	       "I see: %lp\n"
+	       "Should %lp\n", isnow, shouldbe);
 }
 
 /* Set up the debugger
@@ -169,11 +222,17 @@ void set_debug_traps(void)
 	 */
 
 	puts("trap 14\n");
+	traps[TRAP_14 / sizeof(void *)] = GetIntVec(TRAP_14);
 	SetIntVec(TRAP_14, catch_group12);
+
 	puts("on\n");
+	traps[INT_VEC_ON_KEY_PRESS / sizeof(void *)] = GetIntVec(INT_VEC_ON_KEY_PRESS);
 	SetIntVec(INT_VEC_ON_KEY_PRESS, catch_group12);
-	puts("int2\n");
-	SetIntVec(AUTO_INT_2, catch_group12);
+
+	puts("trace\n");
+	traps[INT_VEC_TRACE / sizeof(void *)] = GetIntVec(INT_VEC_TRACE);
+	SetIntVec(INT_VEC_TRACE, catch_group12);
+
 }
 
 /* Return the system to normal
@@ -182,24 +241,4 @@ void remove_debug_traps(void)
 {
 	free(debug_stack_seg);
 	free(traps);
-}
-
-/* Block until a byte is received from the host gdb.
- */
-char recv_byte(void)
-{
-	return peekIO(0x60000f);
-}
-
-char *recv_packet(void)
-{
-
-}
-
-/* Send a byte to the host gdb and then return.
- */
-void send_byte(char c)
-{
-	pokeIO(0x60000f, c);
-	return;
 }
