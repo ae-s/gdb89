@@ -3,8 +3,8 @@ CFLAGS=-gstabs
 
 .PHONY: install clean
 
-hello.89z: hello.c ti89-stub.c ti89-stub.h
-	$(CC) $(CFLAGS) hello.c ti89-stub.c
+hello.89z: hello.c ti89-stub.c ti89-stub.h comms.c comms.h
+	$(CC) $(CFLAGS) hello.c ti89-stub.c comms.c
 
 clean:
 	rm -f hello.89z hello.dbg

@@ -5,21 +5,19 @@
 
 void _main(void);
 
+short sr;
 void _main(void)
 {
 	long int x;
-	puts("foo\n");
-	puts("Setting traps\n");
-	set_debug_traps();
-//	halted(0);
-//	puts("break\n");
-	printf("catcher is: %lp\n", catch_group12);
-	printf("Trap 14 is: %lp\n", GetIntVec(TRAP_14));
-	for (x = 0 ; x++ ; x < 100000) {}
-	breakpoint();
-	puts(".\n");
 
-	while (1) {}
+	clrscr();
+	set_debug_traps();
+	printf_xy(0, 60, "_main = %lp\n", &_main);
+//	for (x = 0 ; x++ ; x < 1000000) {}
+//	breakpoint();
+//	puts(".\n");
+
+	while (1) {};
 }
 
 // Used to listen to the remote debugger
